@@ -7,6 +7,7 @@ Dialogue Edit Repair App (macOS offline-safe GUI v4)
 - WAV / markers 파일 드래그 앤 드롭 지원
 - 분석 / 저장 중 진행률, 경과시간, 예상 남은 시간 표시
 - 한국어 / English UI 전환 기능
+- 쉬운 모드 원노브 조정(Easy Repair Dial)
 - 선택 이벤트만 복원해서 저장
 - 작업 취소 버튼 추가
 - 선택 이벤트 원본/복원 A/B 미리듣기 추가 (macOS afplay 기반)
@@ -57,6 +58,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDial,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -98,6 +100,8 @@ LANG_TEXTS: Dict[str, Dict[str, str]] = {
         "sensitivity": "Sensitivity",
         "repair_half_ms": "Repair half width (ms)",
         "click_threshold": "Click threshold",
+        "easy_mode": "Easy Repair",
+        "easy_hint": "One knob controls sensitivity, width and threshold together",
         "preview_ms": "Preview length (ms)",
         "auto_detect": "Enable auto detect",
         "clap_protect": "Protect clap / impact sounds",
@@ -192,6 +196,8 @@ LANG_TEXTS: Dict[str, Dict[str, str]] = {
         "sensitivity": "민감도",
         "repair_half_ms": "복원 반폭 (ms)",
         "click_threshold": "클릭 임계값",
+        "easy_mode": "간편 조정",
+        "easy_hint": "하나의 노브로 민감도, 폭, 임계값을 함께 조정",
         "preview_ms": "미리듣기 길이 (ms)",
         "auto_detect": "자동 탐지 사용",
         "clap_protect": "박수 / 타격음 보호",
@@ -812,6 +818,9 @@ class MainWindow(QMainWindow):
         self.spin_repair_ms = QDoubleSpinBox(); self.spin_repair_ms.setRange(0.1, 5.0); self.spin_repair_ms.setSingleStep(0.1); self.spin_repair_ms.setValue(0.6)
         self.spin_threshold = QDoubleSpinBox(); self.spin_threshold.setRange(0.1, 2.0); self.spin_threshold.setSingleStep(0.05); self.spin_threshold.setValue(0.85)
         self.spin_preview_ms = QDoubleSpinBox(); self.spin_preview_ms.setRange(100.0, 4000.0); self.spin_preview_ms.setSingleStep(50.0); self.spin_preview_ms.setValue(800.0)
+        self.easy_dial = QDial(); self.easy_dial.setRange(0, 100); self.easy_dial.setValue(55); self.easy_dial.setNotchesVisible(True)
+        self.easy_value_label = QLabel()
+        self.easy_hint_label = QLabel()
         self.chk_auto = QCheckBox()
         self.chk_auto.setChecked(True)
         self.chk_clap = QCheckBox()
@@ -822,12 +831,17 @@ class MainWindow(QMainWindow):
         self.lang_combo.addItem("한국어", "ko")
         self.lang_combo.addItem("English", "en")
         self.lang_combo.currentIndexChanged.connect(self.on_language_changed)
+        self.easy_dial.valueChanged.connect(self.update_easy_controls_from_dial)
 
+        self.options_easy_mode_label = QLabel()
         self.options_sensitivity_label = QLabel()
         self.options_repair_ms_label = QLabel()
         self.options_threshold_label = QLabel()
         self.options_preview_ms_label = QLabel()
         self.options_language_label = QLabel()
+        easy_row = QWidget(); easy_layout = QHBoxLayout(easy_row); easy_layout.setContentsMargins(0, 0, 0, 0); easy_layout.addWidget(self.easy_dial); easy_layout.addWidget(self.easy_value_label)
+        options_form.addRow(self.options_easy_mode_label, easy_row)
+        options_form.addRow(QLabel(""), self.easy_hint_label)
         options_form.addRow(self.options_sensitivity_label, self.spin_sensitivity)
         options_form.addRow(self.options_repair_ms_label, self.spin_repair_ms)
         options_form.addRow(self.options_threshold_label, self.spin_threshold)
@@ -958,7 +972,10 @@ class MainWindow(QMainWindow):
         self.chk_auto.setText(self.tr_text("auto_detect"))
         self.chk_clap.setText(self.tr_text("clap_protect"))
         self.chk_transient.setText(self.tr_text("transient_protect"))
+        self.options_easy_mode_label.setText(self.tr_text("easy_mode"))
+        self.easy_hint_label.setText(self.tr_text("easy_hint"))
         self.options_language_label.setText(self.tr_text("language"))
+        self.update_easy_controls_from_dial()
         self.run_group.setTitle(self.tr_text("run"))
         self.btn_analyze.setText(self.tr_text("analyze"))
         self.btn_repair.setText(self.tr_text("repair_save"))
@@ -1071,9 +1088,26 @@ class MainWindow(QMainWindow):
         self.show_error(self.tr_text("audio_backend_unavailable"), message)
         return False
 
+    def update_easy_controls_from_dial(self) -> None:
+        v = self.easy_dial.value() / 100.0
+        sensitivity = 0.7 + (v * 1.8)
+        repair_half_ms = 0.35 + (v * 1.25)
+        threshold = 1.10 - (v * 0.55)
+        self.spin_sensitivity.blockSignals(True)
+        self.spin_repair_ms.blockSignals(True)
+        self.spin_threshold.blockSignals(True)
+        self.spin_sensitivity.setValue(round(sensitivity, 2))
+        self.spin_repair_ms.setValue(round(repair_half_ms, 2))
+        self.spin_threshold.setValue(round(threshold, 2))
+        self.spin_sensitivity.blockSignals(False)
+        self.spin_repair_ms.blockSignals(False)
+        self.spin_threshold.blockSignals(False)
+        self.easy_value_label.setText(str(self.easy_dial.value()))
+
     def current_config(self) -> Any:
         if not self.require_backend():
             return None
+        self.update_easy_controls_from_dial()
         return self.backend.mvp.RepairConfig(
             auto_detect=self.chk_auto.isChecked(),
             sensitivity=float(self.spin_sensitivity.value()),
@@ -1161,6 +1195,9 @@ class MainWindow(QMainWindow):
         if cfg is None:
             return
         self.cfg = cfg
+        if self.markers_path:
+            self.chk_auto.setChecked(False)
+            self.cfg.auto_detect = False
         self.set_busy(True)
         self.set_progress(0, 100, "", self.tr_text("status_analyzing"))
         self.analyze_worker = AnalyzeWorker(self.backend, self.audio, self.sr, self.markers_path, self.cfg, LANG_TEXTS[self.language])
@@ -1387,6 +1424,21 @@ class MainWindow(QMainWindow):
 
 
 class DependencyAndPreviewTests(unittest.TestCase):
+    def test_easy_dial_mapping_bounds(self) -> None:
+        class Dummy:
+            pass
+        d = Dummy()
+        d.easy_dial = Dummy(); d.easy_dial.value = lambda: 0
+        d.spin_sensitivity = Dummy(); d.spin_sensitivity.blockSignals = lambda *_: None; d.spin_sensitivity.setValue = lambda v: setattr(d, 'sens', v)
+        d.spin_repair_ms = Dummy(); d.spin_repair_ms.blockSignals = lambda *_: None; d.spin_repair_ms.setValue = lambda v: setattr(d, 'width', v)
+        d.spin_threshold = Dummy(); d.spin_threshold.blockSignals = lambda *_: None; d.spin_threshold.setValue = lambda v: setattr(d, 'thr', v)
+        d.easy_value_label = Dummy(); d.easy_value_label.setText = lambda v: setattr(d, 'label', v)
+        MainWindow.update_easy_controls_from_dial(d)
+        self.assertGreaterEqual(d.sens, 0.7)
+        self.assertGreaterEqual(d.width, 0.35)
+        self.assertLessEqual(d.thr, 1.10)
+
+
     def test_ensure_mono_1d_keeps_shape(self) -> None:
         x = np.array([0.0, 1.0, -1.0], dtype=np.float32)
         mono = ensure_mono(x)
